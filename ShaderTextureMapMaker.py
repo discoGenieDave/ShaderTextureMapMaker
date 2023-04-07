@@ -1,264 +1,258 @@
+import sys
 import os
 import cv2
 import numpy as np
-from PIL import Image
-from PySide6.QtCore import Qt, QRect
-from PySide6.QtGui import QColor, QImage, QPixmap, QDragEnterEvent, QDropEvent, QImageReader, QPainter
-from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QVBoxLayout, QWidget, QLineEdit, QSlider, QComboBox, \
-    QHBoxLayout, QColorDialog
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QImage, QPixmap
+from PySide6.QtWidgets import QApplication, QWidget, QVBoxLayout, QLabel, QSlider, QComboBox, QHBoxLayout, QLineEdit, QPushButton, QMessageBox, QColorDialog
 
-# Set up grid parameters
-GRID_SIZE = 4
-GRID_WIDTH = 512
-GRID_HEIGHT = 512
-PADDING = 10
-TOTAL_WIDTH = GRID_WIDTH + 2 * PADDING
-TOTAL_HEIGHT = GRID_HEIGHT + 2 * PADDING + 30
 
-# Set up image parameters
-IMAGE_SIZE = 2048
-NUM_COLORS = 256
-
-class DirectoryLineEdit(QLineEdit):
+# Drag and Drop for the output FOlder
+class FolderLineEdit(QLineEdit):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.setAcceptDrops(True)
 
-    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
+    def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
             event.acceptProposedAction()
 
-    def dropEvent(self, event: QDropEvent) -> None:
-        url = event.mimeData().urls()[0].toLocalFile()
-        self.setText(url)
+    def dropEvent(self, event):
+        folder_path = event.mimeData().urls()[0].toLocalFile()
+        if os.path.isdir(folder_path):
+            self.setText(folder_path)
+        else:
+            QMessageBox.warning(self, "Invalid Folder", "Please drop a folder.")
 
-class DropLabel(QLabel):
-    def __init__(self, parent):
-        super().__init__(parent)
+
+# Drag and Drop Support for the QLabel
+class DnDImageLabel(QLabel):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         self.setAcceptDrops(True)
 
-    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
+    def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
             event.acceptProposedAction()
 
-    def dropEvent(self, event: QDropEvent):
-        filepath = event.mimeData().urls()[0].toLocalFile()
-        _, filename = os.path.split(filepath)
-        if "RGBMask" in filename.lower():
-
-            # Read the drag and drop image
-
-            img = cv2.imread(filepath)
-            img = Image
-            # Check if the image is 4096 and resize it if it is
-            if img is not None and img.shape[:2] == (4096, 4096):
-
-                # Cropping the image on the lower left using Slicing Indexing
-                img_cropped = img[0:2048, 2048:2048]
-                self.setPixmap(QPixmap.fromImage(img_cropped))
-                pixmap = QPixmap.fromImage(img_cropped)
-                self.setPixmap(pixmap)
-
-                # using PIL to extract the channel information from the image
-                img_cropped.open()
-                red_chan = img_cropped.getchannel('R')
-                green_chan = img_cropped.getchannel('G')
-                blue_chan = img_cropped.getchannel('B')
-
-        return super().dropEvent(event), red_chan, green_chan, blue_chan
+    def dropEvent(self, event):
+        image_path = event.mimeData().urls()[0].toLocalFile()
+        self.parent().process_dropped_image(image_path)
 
 
-
-
-
-
-class MainWindow(QWidget):
+class AppDemo(QWidget):
     def __init__(self):
         super().__init__()
 
+        layout = QVBoxLayout()
+        # sets up an empty array for the loaded texture maps
+        self.loaded_files = []
 
-        # Set up layout
-        self.layout = QVBoxLayout(self)
-        self.layout.setContentsMargins(PADDING, PADDING, PADDING, PADDING)
-        self.layout.setSpacing(0)
+        self.preview_label = DnDImageLabel(self)
+        layout.addWidget(self.preview_label)
+        self.setWindowTitle("Genies Face Jewelry Texture Mapper")
 
-        # Create QLineEdit for directory input
-        self.directory_input = DirectoryLineEdit(self)
-        self.directory_input.setPlaceholderText("Drag Output Folder Here")
-        self.layout.addWidget(self.directory_input)
+        self.square_dict = {
+            'Metallic': (0, 0),
+            'Smoothness': (0, 1),
+            'Emission': (0, 2),
+            'Fresnel': (0, 3),
+            'Fuzziness': (1, 0),
+            'OGMtSm': (1, 1),
+            'Red_Mask': (1, 2),
+            'Blue_Mask': (1, 3),
+            'Iridescent_Red': (2, 0),
+            'Iridescent_Green': (2, 1),
+            'Iridescent_Blue': (2, 2),
+            'Iridescent_Mask': (2, 3),
+            'Glitter_Red': (3, 0),
+            'Glitter_Green': (3, 1),
+            'Glitter_Blue': (3, 2),
+            'Glitter_Mask': (3, 3)
+        }
 
-        # Create grid of squares
-        self.grid = np.zeros((GRID_SIZE, GRID_SIZE), dtype=np.uint8)
-        for i in range(GRID_SIZE):
-            for j in range(GRID_SIZE):
-                self.grid[i][j] = np.random.randint(NUM_COLORS)
+        hbox = QHBoxLayout()
 
-        # Setting Iridescence and Gliiter Mask to White
-        self.grid[2][3] = 1
-        self.grid[3][3] = 1
+        self.combo_box = QComboBox()
+        self.combo_box.addItems(list(self.square_dict.keys())[:5])
+        hbox.addWidget(self.combo_box)
 
-
-        # Create QImage from grid
-        self.image = QImage(GRID_SIZE, GRID_SIZE, QImage.Format_RGBA8888)
-        for i in range(GRID_SIZE):
-            for j in range(GRID_SIZE):
-                gray_value = self.grid[i][j]
-                color = QColor(gray_value, gray_value, gray_value)
-                self.image.setPixelColor(j, i, color)
-
-        # Create QLabel to display QImage
-        self.label = DropLabel(self)
-        self.setAcceptDrops(True)
-        self.label.setPixmap(QPixmap.fromImage(self.image))
-        pixmap = QPixmap.fromImage(self.image)
-        pixmap = pixmap.scaled(GRID_WIDTH, GRID_HEIGHT)
-        self.label.setPixmap(pixmap)
-        self.layout.addWidget(self.label)
-
-        # Set up window properties
-        self.setWindowTitle("Shader Texture Mapper")
-        self.setFixedSize(TOTAL_WIDTH, TOTAL_HEIGHT)
-
-        # Create slider and combobox
-        self.slider_combobox_layout = QHBoxLayout()
         self.slider = QSlider(Qt.Horizontal)
-        self.slider.setMinimum(0)
-        self.slider.setMaximum(255)
-        self.slider.valueChanged.connect(self.update_selected_square)
+        self.slider.setRange(0, 255)
+        self.slider.setValue(128)
+        self.slider.valueChanged.connect(self.update_alpha)
+        hbox.addWidget(self.slider)
 
-        self.combobox = QComboBox()
-        self.combobox.addItems(['Metallic', 'Smoothness', 'Emission', 'Fresnel', 'Fuzziness'])
-        self.combobox.currentIndexChanged.connect(self.update_slider_value)
+        self.ogmtsm_label = QLabel("OGMtSM")
+        hbox.addWidget(self.ogmtsm_label)
 
-        self.slider_combobox_layout.addWidget(self.slider)
-        self.slider_combobox_layout.addWidget(self.combobox)
-        self.layout.addLayout(self.slider_combobox_layout)
-
-        # Add the Color Pickers
-        self.setup_color_buttons()
-
-        # Create "Create Texture" button
-        self.button = QPushButton("Create Texture", self)
-        self.button.clicked.connect(self.create_texture)
-        self.layout.addWidget(self.button)
-
-        # Set up window properties
-        self.setWindowTitle("Gray Grid")
-        self.setFixedSize(TOTAL_WIDTH, TOTAL_HEIGHT)
-
-    def create_image_from_grid(self):
-        img = QImage(2048, 2048, QImage.Format_RGBA8888)
-        img.fill(Qt.transparent)
-        painter = QPainter(img)
-
-        for row in range(4):
-            for col in range(4):
-                color = self.grid[row][col]
-                if isinstance(color, np.ndarray):  # Handle NumPy arrays
-                    qimage = QImage(color.data, color.shape[1], color.shape[0], QImage.Format_RGB888)
-                    painter.drawImage(col * 512, row * 512, qimage.scaled(512, 512))
-                else:
-                    rect = QRect(col * 512, row * 512, 512, 512)
-                    img.fillRect(rect, QColor(color, color, color, 255))
-
-        painter.end()
-        return img
-
-
-
-
-    def update_slider_value(self):
-        square_idx = self.combobox.currentIndex()
-        square_row = square_idx // GRID_SIZE
-        square_col = square_idx % GRID_SIZE
-        self.slider.setValue(self.grid[square_row][square_col])
-
-    def update_selected_square(self):
-        gray_value = self.slider.value()
-        square_idx = self.combobox.currentIndex()
-        square_row = square_idx // GRID_SIZE
-        square_col = square_idx % GRID_SIZE
-        self.grid[square_row][square_col] = gray_value
-        self.update_image()
-
-
-    def update_image(self):
-        for i in range(GRID_SIZE):
-            for j in range(GRID_SIZE):
-                gray_value = self.grid[i][j]
-                color = QColor(gray_value, gray_value, gray_value)
-                self.image.setPixelColor(j, i, color)
-        pixmap = QPixmap.fromImage(self.image)
-        pixmap = pixmap.scaled(GRID_WIDTH, GRID_HEIGHT)
-        self.label.setPixmap(pixmap)
-
-    def setup_color_buttons(self):
-        self.color_buttons_layout = QHBoxLayout()
-
-        self.og_mtsm_combobox = QComboBox()
-        self.og_mtsm_combobox.addItems(["OG MtSM On", "OG MtSM Off"])
-        self.og_mtsm_combobox.setCurrentIndex(0 if self.grid[1][0] == 255 else 1)
-        self.og_mtsm_combobox.currentIndexChanged.connect(self.toggle_og_mtsm)
-        self.color_buttons_layout.addWidget(self.og_mtsm_combobox)
-
-
-
-        self.color_buttons_layout.addWidget(self.og_mtsm_combobox)
+        self.ogmtsm_combo_box = QComboBox()
+        self.ogmtsm_combo_box.addItems(["Off", "On"])
+        self.ogmtsm_combo_box.currentIndexChanged.connect(self.update_ogmtsm)
+        hbox.addWidget(self.ogmtsm_combo_box)
 
         self.iridescence_button = QPushButton("Iridescence")
         self.iridescence_button.clicked.connect(self.set_iridescence_color)
-        self.color_buttons_layout.addWidget(self.iridescence_button)
+        hbox.addWidget(self.iridescence_button)
 
         self.glitter_button = QPushButton("Glitter")
         self.glitter_button.clicked.connect(self.set_glitter_color)
-        self.color_buttons_layout.addWidget(self.glitter_button)
+        hbox.addWidget(self.glitter_button)
 
-        self.layout.addLayout(self.color_buttons_layout)
+        layout.addLayout(hbox)
 
-    def toggle_og_mtsm(self, index):
-        if index == 1:  # Off (Black)
-            self.grid[1][1] = 0
-        else:  # On (White)
-            self.grid[1][1] = 255
-        self.update_image()
+        self.folder_line_edit = FolderLineEdit()
+        layout.addWidget(self.folder_line_edit)
+
+        self.export_button = QPushButton("Export")
+        self.export_button.clicked.connect(self.export_image)
+        layout.addWidget(self.export_button)
+
+        self.setLayout(layout)
+
+        self.original_grid = self.create_original_grid()
+        self.update_preview()
+
+    def create_original_grid(self):
+        grid = np.zeros((2048, 2048, 4), dtype=np.uint8)
+        for key, (x, y) in self.square_dict.items():
+            color_value = np.random.randint(0, 255)
+            grid[x * 512:(x + 1) * 512, y * 512:(y + 1) * 512, :3] = color_value
+            grid[x * 512:(x + 1) * 512, y * 512:(y + 1) * 512, 3] = 128
+        return grid
+
+    def update_preview(self):
+        preview = cv2.resize(self.original_grid, (512, 512), interpolation=cv2.INTER_AREA)
+        qimage = QImage(preview.data, preview.shape[1], preview.shape[0], preview.strides[0], QImage.Format_RGBA8888)
+        pixmap = QPixmap.fromImage(qimage)
+        self.preview_label.setPixmap(pixmap)
+
+    def update_alpha(self):
+        alpha = self.slider.value()
+        square_key = self.combo_box.currentText()
+        x, y = self.square_dict[square_key]
+        self.original_grid[x * 512:(x + 1) * 512, y * 512:(y + 1) * 512, 3] = alpha
+        self.update_preview()
+
+    def update_ogmtsm(self, index):
+        alpha = 255 if index == 1 else 0
+        x, y = self.square_dict['OGMtSm']
+        self.original_grid[x * 512:(x + 1) * 512, y * 512:(y + 1) * 512, 3] = alpha
+        self.update_preview()
 
     def set_iridescence_color(self):
         color = QColorDialog.getColor()
         if color.isValid():
-            self.grid[2][0] = color.red()
-            self.grid[2][1] = color.green()
-            self.grid[2][2] = color.blue()
-            self.update_image()
+            r, g, b, _ = color.getRgb()
+            self.update_square_alpha('Iridescent_Red', r)
+            self.update_square_alpha('Iridescent_Green', g)
+            self.update_square_alpha('Iridescent_Blue', b)
+            self.update_square_alpha('Iridescent_Mask', 1)
+            self.update_preview()
 
     def set_glitter_color(self):
         color = QColorDialog.getColor()
         if color.isValid():
-            self.grid[3][0] = color.red()
-            self.grid[3][1] = color.green()
-            self.grid[3][2] = color.blue()
-            self.update_image()
+            r, g, b, _ = color.getRgb()
+            self.update_square_alpha('Glitter_Red', r)
+            self.update_square_alpha('Glitter_Green', g)
+            self.update_square_alpha('Glitter_Blue', b)
+            self.update_square_alpha('Glitter_Mask', 1)
+            self.update_preview()
+
+    def update_square_alpha(self, square_key, alpha):
+        x, y = self.square_dict[square_key]
+        self.original_grid[x * 512:(x + 1) * 512, y * 512:(y + 1) * 512, 3] = alpha
+
+    def process_dropped_image(self, image_path):
 
 
 
+        # Read the image
+        image = cv2.imread(image_path, cv2.IMREAD_COLOR)
+
+        # Convert BGR to RGB
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+        # Split the channels
+        red, green, blue = cv2.split(image)
+
+        # Add an alpha channel and set its values to zero
+        alpha = np.zeros_like(red)
+
+        # Merge the channels with the added alpha channel
+        image_with_alpha = cv2.merge((red, green, blue, alpha))
+
+        # Get the image name
+        image_name = os.path.basename(image_path)
+
+        self.loaded_files.append(image_name)
+        # Crop the image
+        cropped_image = image_with_alpha[2048:4096, 0:2048]
+
+        if 'RGBMask' in image_name:
+            # Convert the red and blue channels to grayscale
+            red_gray = cv2.cvtColor(cv2.merge((red, red, red)), cv2.COLOR_RGB2GRAY)
+            blue_gray = cv2.cvtColor(cv2.merge((blue, blue, blue)), cv2.COLOR_RGB2GRAY)
+
+            # Resize the grayscale images to fit the squares
+            red_resized = cv2.resize(red_gray, (512, 512))
+            blue_resized = cv2.resize(blue_gray, (512, 512))
+
+            # Update the alpha of the squares with the grayscale images
+            self.original_grid[512:1024, 1024:1536, 3] = red_resized
+            self.original_grid[512:1024, 1536:2048, 3] = blue_resized
 
 
-    def create_texture(self):
-        # Create larger image from grid
-        large_grid = cv2.resize(self.grid, (IMAGE_SIZE, IMAGE_SIZE), interpolation=cv2.INTER_NEAREST)
-        large_grid = np.repeat(large_grid[:, :, np.newaxis], 4, axis=2)
-        large_image = QImage(large_grid, IMAGE_SIZE, IMAGE_SIZE, QImage.Format_RGBA8888)
+        elif 'Normal' in image_name:
+            # Assign red and green channels from the cropped image with alpha to the original grid's corresponding channels
+            self.original_grid[:, :, :2] = cropped_image[:, :, :2]
 
-        # Get the directory from the QLineEdit
-        directory = self.directory_input.text()
-        if directory:
-            # Save the image to the selected directory
-            filename = f"{directory}/dress-0069-silvertooth_002.png"
-            large_image.save(filename)
+            # Set the blue channel values to zero
+            self.original_grid[:, :, 2] = 0
+
+        else:
+            QMessageBox.warning(self, "Invalid Image", "Please use an image with 'RGBMask' or 'Normal' in its name.")
+            return
+
+        self.update_preview()
+
+    def export_image(self):
+        folder_path = self.folder_line_edit.text()
+
+        if not folder_path:
+            QMessageBox.warning(self, "No Folder Selected", "Please select a folder to export the image.")
+            return
+
+        # Get the base name from the input images
+        base_name = None
+        for file_name in self.loaded_files:
+            if 'RGBMask' in file_name:
+                base_name = file_name.replace('RGBMask', '_packedTexture')
+                break
+            elif 'Normal' in file_name:
+                base_name = file_name.replace('Normal', '_packedTexture')
+                break
+
+        if base_name is None:
+            QMessageBox.warning(self, "No Valid Image",
+                                "Please drop a valid image with 'RGBMask' or 'Normal' in its name.")
+            return
+
+        # Convert the RGB image to BGR format
+        bgr_image = cv2.cvtColor(self.original_grid, cv2.COLOR_RGBA2BGRA)
+
+        # Save the image
+        export_path = os.path.join(folder_path, base_name)
+        cv2.imwrite(export_path, bgr_image)
+
+        QMessageBox.information(self, "Image Exported", f"The image was successfully exported to {export_path}.")
 
 
-if __name__ == "__main__":
-    # Set up QApplication
-    app = QApplication([])
-    window = MainWindow()
-    window.show()
-    app.exec()
+if __name__ == '__main__':
+    app = QApplication(sys.argv)
+
+    main_win = AppDemo()
+    main_win.show()
+
+    sys.exit(app.exec())
